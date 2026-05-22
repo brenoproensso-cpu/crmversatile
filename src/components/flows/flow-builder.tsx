@@ -247,6 +247,32 @@ export function FlowBuilder({ initialFlow, initialNodes }: FlowBuilderProps) {
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set(initialNodes.map((n) => n.node_key)),
   );
+  // Tracks whether the in-memory state has user edits that haven't been
+  // PUT yet. We use a wrapper setState (`setStateDirty`) for user edits;
+  // status-only changes after the activate API succeeds use raw setState
+  // so they don't falsely re-flag the form as dirty.
+  const [dirty, setDirty] = useState(false);
+  const setStateDirty = useCallback<typeof setState>((updaterOrValue) => {
+    setDirty(true);
+    setState(updaterOrValue);
+  }, []);
+
+  // Browser-level reload / tab-close / external-link guard. SPA
+  // navigation (sidebar links, back button) isn't covered here — Next 16
+  // routes through the App Router and beforeunload doesn't fire on
+  // client-side route changes. That's a follow-up; this catches the
+  // accidental refresh / closed-window class of data loss.
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // Modern browsers ignore the return value but require something
+      // truthy to actually show the native prompt.
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirty]);
 
   // ---- Validation ----
   const issues = useMemo<ValidationIssue[]>(
@@ -285,6 +311,7 @@ export function FlowBuilder({ initialFlow, initialNodes }: FlowBuilderProps) {
         const json = await res.json().catch(() => ({}));
         throw new Error(json.error ?? `Save failed: ${res.status}`);
       }
+      setDirty(false);
       toast.success("Saved.");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Save failed";
@@ -357,31 +384,31 @@ export function FlowBuilder({ initialFlow, initialNodes }: FlowBuilderProps) {
   // ---- Node helpers ----
   const updateNode = useCallback(
     (key: string, patch: Partial<BuilderNode>) => {
-      setState((s) => ({
+      setStateDirty((s) => ({
         ...s,
         nodes: s.nodes.map((n) => (n.node_key === key ? { ...n, ...patch } : n)),
       }));
     },
-    [],
+    [setStateDirty],
   );
 
   const updateNodeConfig = useCallback(
     (key: string, configPatch: Record<string, unknown>) => {
-      setState((s) => ({
+      setStateDirty((s) => ({
         ...s,
         nodes: s.nodes.map((n) =>
           n.node_key === key ? { ...n, config: { ...n.config, ...configPatch } } : n,
         ),
       }));
     },
-    [],
+    [setStateDirty],
   );
 
   const addNode = useCallback(
     (type: NodeType) => {
       const meta = NODE_META[type];
       const base = slugify(meta.label, type);
-      setState((s) => {
+      setStateDirty((s) => {
         const node_key = uniqueNodeKey(base, s.nodes);
         const next: BuilderNode = {
           node_key,
@@ -400,21 +427,24 @@ export function FlowBuilder({ initialFlow, initialNodes }: FlowBuilderProps) {
         };
       });
     },
-    [],
+    [setStateDirty],
   );
 
-  const removeNode = useCallback((key: string) => {
-    setState((s) => ({
-      ...s,
-      nodes: s.nodes.filter((n) => n.node_key !== key),
-      entry_node_id: s.entry_node_id === key ? null : s.entry_node_id,
-    }));
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      next.delete(key);
-      return next;
-    });
-  }, []);
+  const removeNode = useCallback(
+    (key: string) => {
+      setStateDirty((s) => ({
+        ...s,
+        nodes: s.nodes.filter((n) => n.node_key !== key),
+        entry_node_id: s.entry_node_id === key ? null : s.entry_node_id,
+      }));
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    },
+    [setStateDirty],
+  );
 
   const toggleExpanded = useCallback((key: string) => {
     setExpanded((prev) => {
@@ -430,7 +460,8 @@ export function FlowBuilder({ initialFlow, initialNodes }: FlowBuilderProps) {
     <div className="mx-auto flex h-full max-w-4xl flex-col gap-6 p-6">
       <Header
         state={state}
-        setState={setState}
+        setState={setStateDirty}
+        dirty={dirty}
         saving={saving}
         activating={activating}
         onSave={handleSave}
@@ -443,11 +474,11 @@ export function FlowBuilder({ initialFlow, initialNodes }: FlowBuilderProps) {
 
       <TriggerPanel
         state={state}
-        setState={setState}
+        setState={setStateDirty}
         triggerIssues={issues.filter((i) => i.scope === "trigger")}
       />
 
-      <EntryPicker state={state} setState={setState} />
+      <EntryPicker state={state} setState={setStateDirty} />
 
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
@@ -479,7 +510,7 @@ export function FlowBuilder({ initialFlow, initialNodes }: FlowBuilderProps) {
               onUpdateConfig={(patch) => updateNodeConfig(node.node_key, patch)}
               onRemove={() => removeNode(node.node_key)}
               onSetEntry={() =>
-                setState((s) => ({ ...s, entry_node_id: node.node_key }))
+                setStateDirty((s) => ({ ...s, entry_node_id: node.node_key }))
               }
             />
           ))
@@ -498,6 +529,7 @@ export function FlowBuilder({ initialFlow, initialNodes }: FlowBuilderProps) {
 function Header({
   state,
   setState,
+  dirty,
   saving,
   activating,
   onSave,
@@ -509,6 +541,7 @@ function Header({
 }: {
   state: BuilderState;
   setState: React.Dispatch<React.SetStateAction<BuilderState>>;
+  dirty: boolean;
   saving: boolean;
   activating: boolean;
   onSave: () => void;
@@ -542,6 +575,16 @@ function Header({
             className="max-w-md bg-slate-900 text-lg font-semibold"
           />
           <StatusBadge status={state.status} />
+          {dirty && (
+            <span
+              className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-amber-300"
+              title="Unsaved changes — hit Save to persist"
+              aria-live="polite"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+              Edited
+            </span>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button
