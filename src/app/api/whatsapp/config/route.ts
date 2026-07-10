@@ -7,6 +7,32 @@ import {
   verifyPhoneNumber,
 } from '@/lib/whatsapp/meta-api'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
+import {
+  checkUazapiConfigHealth,
+  saveAndConnectUazapiConfig,
+} from '@/lib/whatsapp/uazapi-config'
+
+/** Same resolution order as getBaseUrl() in api/account/invitations/route.ts,
+ *  minus the ALLOWED_INVITE_HOSTS allow-list — a spoofed Host header here only
+ *  mis-registers our OWN webhook against the wrong domain (the user notices
+ *  immediately, since inbound events simply stop working), not a phishing
+ *  vector like invite links are. */
+function resolveAppBaseUrl(request: Request): string {
+  const explicit = process.env.NEXT_PUBLIC_SITE_URL?.trim()
+  if (explicit) return explicit.replace(/\/+$/, '')
+
+  const forwardedHost = request.headers.get('x-forwarded-host')?.split(',')[0]?.trim()
+  const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim()
+  if (forwardedHost) return `${forwardedProto || 'https'}://${forwardedHost}`
+
+  const host = request.headers.get('host')?.trim()
+  if (host) {
+    const reqProto = new URL(request.url).protocol.replace(':', '')
+    return `${reqProto}://${host}`
+  }
+
+  throw new Error('Could not determine the app base URL for the UAZAPI webhook callback')
+}
 
 /**
  * Resolve the caller's account_id from their profile. Inlined here
@@ -87,7 +113,7 @@ export async function GET() {
 
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
-      .select('phone_number_id, access_token, status')
+      .select('phone_number_id, access_token, status, provider, uazapi_server_url, uazapi_token, id')
       .eq('account_id', accountId)
       .maybeSingle()
 
@@ -108,6 +134,30 @@ export async function GET() {
         },
         { status: 200 }
       )
+    }
+
+    if (config.provider === 'uazapi') {
+      try {
+        const health = await checkUazapiConfigHealth(supabase, {
+          id: config.id,
+          uazapi_server_url: config.uazapi_server_url!,
+          uazapi_token: config.uazapi_token!,
+          status: config.status,
+        })
+        return NextResponse.json({
+          connected: health.connected,
+          provider: 'uazapi',
+          status: health.status,
+          qrcode: health.qrcode,
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown UAZAPI error'
+        console.error('[whatsapp/config GET] UAZAPI status check failed:', message)
+        return NextResponse.json(
+          { connected: false, provider: 'uazapi', reason: 'uazapi_api_error', message },
+          { status: 200 },
+        )
+      }
     }
 
     // Try to decrypt the stored token with the current ENCRYPTION_KEY.
@@ -185,6 +235,40 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
+
+    if (body.provider === 'uazapi') {
+      const { uazapi_server_url, uazapi_token } = body
+      if (!uazapi_server_url || !uazapi_token) {
+        return NextResponse.json(
+          { error: 'uazapi_server_url and uazapi_token are required' },
+          { status: 400 },
+        )
+      }
+
+      const { data: existing } = await supabase
+        .from('whatsapp_config')
+        .select('id')
+        .eq('account_id', accountId)
+        .maybeSingle()
+
+      try {
+        const result = await saveAndConnectUazapiConfig(
+          supabase,
+          supabaseAdmin(),
+          accountId,
+          user.id,
+          existing?.id ?? null,
+          { serverUrl: uazapi_server_url, token: uazapi_token },
+          resolveAppBaseUrl(request),
+        )
+        return NextResponse.json({ success: true, saved: true, provider: 'uazapi', qrcode: result.qrcode })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown UAZAPI error'
+        console.error('[whatsapp/config POST] UAZAPI save failed:', message)
+        return NextResponse.json({ error: message }, { status: 400 })
+      }
+    }
+
     const { phone_number_id, waba_id, access_token, verify_token, pin } = body
 
     if (!access_token || !phone_number_id) {
