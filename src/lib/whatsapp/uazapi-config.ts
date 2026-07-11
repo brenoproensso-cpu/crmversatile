@@ -60,7 +60,14 @@ export async function saveAndConnectUazapiConfig(
   const webhookUrl = `${webhookBaseUrl}/api/whatsapp/webhook/uazapi?key=${webhookSecret}`
   await registerUazapiWebhook(creds, webhookUrl)
 
-  const connectResult = await connectUazapiInstance(creds)
+  // Skip /instance/connect entirely when the instance is already connected
+  // (e.g. reconnecting wacrm to a session that was set up outside it, or
+  // one that outlived a prior wacrm row getting deleted) — some UAZAPI
+  // server configurations reject a connect call on an already-connected
+  // instance with "Maximum number of instances connected reached".
+  const connectResult = liveStatus.connected
+    ? { qrcode: null }
+    : await connectUazapiInstance(creds)
 
   const baseRow = {
     provider: 'uazapi' as const,
@@ -68,9 +75,8 @@ export async function saveAndConnectUazapiConfig(
     uazapi_instance_id: liveStatus.instanceId,
     uazapi_token: encrypt(input.token),
     webhook_secret: encrypt(webhookSecret),
-    // Accurate: the QR hasn't been scanned yet. The live connecting/
-    // connected state is polled separately via checkUazapiConfigHealth.
-    status: 'disconnected' as const,
+    status: liveStatus.connected ? ('connected' as const) : ('disconnected' as const),
+    connected_at: liveStatus.connected ? new Date().toISOString() : null,
     updated_at: new Date().toISOString(),
   }
 

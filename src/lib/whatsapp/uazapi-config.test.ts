@@ -121,6 +121,32 @@ describe('saveAndConnectUazapiConfig', () => {
       ),
     ).rejects.toThrow('Invalid token')
   })
+
+  it('skips /instance/connect and saves status=connected when the instance is already connected', async () => {
+    vi.mocked(getUazapiInstanceStatus).mockResolvedValue({
+      instanceId: 'r00cd19ce7afc39',
+      status: 'connected',
+      connected: true,
+      qrcode: null,
+    })
+    const supabase = fakeSupabase()
+    const adminClient = fakeSupabase()
+
+    const result = await saveAndConnectUazapiConfig(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabase as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      adminClient as any,
+      'account-1',
+      'user-1',
+      null,
+      { serverUrl: 'https://free.uazapi.com', token: 'inst-token' },
+      'https://crm.example.com',
+    )
+
+    expect(connectUazapiInstance).not.toHaveBeenCalled()
+    expect(result).toEqual({ qrcode: null })
+  })
 })
 
 describe('checkUazapiConfigHealth', () => {
