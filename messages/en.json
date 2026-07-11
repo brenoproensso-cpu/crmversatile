@@ -1491,7 +1491,39 @@
       "step4_3": "Paste the <strong class=\"text-foreground\">Webhook Callback URL</strong> from above",
       "step4_4": "Enter the same <strong class=\"text-foreground\">Verify Token</strong> you set here",
       "step4_5": "Subscribe to \"messages\" webhook field",
-      "metaDocs": "Meta WhatsApp API Documentation"
+      "metaDocs": "Meta WhatsApp API Documentation",
+      "providerPicker": {
+        "metaTitle": "Official API (Meta)",
+        "metaDesc": "Connect via Meta's WhatsApp Cloud API using a permanent access token from Meta Business Manager.",
+        "uazapiTitle": "UAZAPI",
+        "uazapiDesc": "Connect an existing UAZAPI instance by scanning a QR code — no Meta Business account required."
+      },
+      "uazapi": {
+        "title": "UAZAPI connection",
+        "description": "Connect your UAZAPI instance by scanning a QR code.",
+        "formTitle": "Connect your instance",
+        "formDesc": "Enter the server URL and instance token from your UAZAPI provider (e.g. uazapi.com or your own server).",
+        "serverUrl": "Server URL",
+        "instanceToken": "Instance Token",
+        "instanceTokenPlaceholder": "Enter your instance token",
+        "connectButton": "Connect",
+        "connecting": "Connecting...",
+        "fieldsRequired": "Server URL and Instance Token are required",
+        "connectFailed": "Failed to connect. Check your server URL and token.",
+        "scanTitle": "Scan the QR code",
+        "scanDesc": "Open WhatsApp on your phone, go to Linked Devices, and scan this code.",
+        "qrAlt": "WhatsApp connection QR code",
+        "waitingScan": "Waiting for scan...",
+        "qrTimeout": "QR code expired. Reload the page to try again.",
+        "connectedToast": "WhatsApp connected!",
+        "connectedTitle": "Connected",
+        "connectedDesc": "Your UAZAPI instance is connected and ready to send messages.",
+        "disconnectButton": "Disconnect",
+        "disconnecting": "Disconnecting...",
+        "disconnectConfirm": "This will disconnect your UAZAPI instance from wacrm. Continue?",
+        "disconnectFailed": "Failed to disconnect",
+        "disconnected": "Disconnected. You can reconnect at any time."
+      }
     },
     "sections": {
       "overview": "Overview",

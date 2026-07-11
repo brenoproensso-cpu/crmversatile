@@ -55,6 +55,7 @@ describe('saveAndConnectUazapiConfig', () => {
     const result = await saveAndConnectUazapiConfig(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       adminClient as any,
       'account-1',
       'user-1',
@@ -90,6 +91,7 @@ describe('saveAndConnectUazapiConfig', () => {
       saveAndConnectUazapiConfig(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         supabase as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         adminClient as any,
         'account-1',
         'user-1',
@@ -109,6 +111,7 @@ describe('saveAndConnectUazapiConfig', () => {
       saveAndConnectUazapiConfig(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         supabase as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         adminClient as any,
         'account-1',
         'user-1',
