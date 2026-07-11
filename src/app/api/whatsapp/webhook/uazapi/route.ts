@@ -5,6 +5,8 @@ import { ingestInboundMessage, ingestStatusUpdate } from '@/lib/whatsapp/inbound
 import {
   parseUazapiMessageEvent,
   parseUazapiStatusEvent,
+  type UazapiMessageEnvelope,
+  type UazapiStatusEnvelope,
 } from '@/lib/whatsapp/uazapi-inbound-parser'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -22,7 +24,9 @@ function supabaseAdmin() {
 interface MatchedConfig {
   account_id: string
   user_id: string
-  uazapi_instance_id: string
+  /** Decrypted — compared against the webhook payload's own `token` field
+   *  as a secondary integrity check (see resolveConfigByWebhookKey). */
+  uazapi_token: string
 }
 
 /**
@@ -33,7 +37,7 @@ interface MatchedConfig {
 async function resolveConfigByWebhookKey(key: string): Promise<MatchedConfig | null> {
   const { data: configs, error } = await supabaseAdmin()
     .from('whatsapp_config')
-    .select('account_id, user_id, webhook_secret, uazapi_instance_id')
+    .select('account_id, user_id, webhook_secret, uazapi_token')
     .eq('provider', 'uazapi')
 
   if (error || !configs) return null
@@ -45,7 +49,7 @@ async function resolveConfigByWebhookKey(key: string): Promise<MatchedConfig | n
         return {
           account_id: config.account_id,
           user_id: config.user_id,
-          uazapi_instance_id: config.uazapi_instance_id,
+          uazapi_token: config.uazapi_token ? decrypt(config.uazapi_token) : '',
         }
       }
     } catch {
@@ -68,28 +72,29 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid key' }, { status: 401 })
   }
 
-  let body: { event?: string; instance?: string; data?: Record<string, unknown> }
+  let body: UazapiMessageEnvelope & UazapiStatusEnvelope
   try {
     body = await request.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  if (body.instance !== config.uazapi_instance_id) {
-    return NextResponse.json({ error: 'Instance mismatch' }, { status: 401 })
+  // The `?key=` match above already resolves the account uniquely; this is
+  // a secondary integrity check against the instance's own token, which
+  // real UAZAPI payloads carry directly (there is no `instance` id field
+  // in the actual delivery, unlike the OpenAPI spec's generic example).
+  if (body.token !== config.uazapi_token) {
+    return NextResponse.json({ error: 'Token mismatch' }, { status: 401 })
   }
 
-  const data = body.data ?? {}
-
-  if (body.event === 'messages') {
-    const parsed = parseUazapiMessageEvent(data, config.account_id, config.user_id)
+  if (body.EventType === 'messages') {
+    const parsed = parseUazapiMessageEvent(body.message ?? {}, config.account_id, config.user_id)
     if (parsed) {
       await ingestInboundMessage(parsed)
     }
-  } else if (body.event === 'messages_update') {
-    const parsed = parseUazapiStatusEvent(data)
-    if (parsed) {
-      await ingestStatusUpdate(parsed)
+  } else if (body.EventType === 'messages_update') {
+    for (const update of parseUazapiStatusEvent(body)) {
+      await ingestStatusUpdate(update)
     }
   }
   // Other events (connection, history, presence, ...) are acked but not

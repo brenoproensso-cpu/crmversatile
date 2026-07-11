@@ -99,6 +99,7 @@ describe('registerUazapiWebhook', () => {
 
     expect(captured?.url).toBe('https://free.uazapi.com/webhook')
     expect(captured?.body).toEqual({
+      enabled: true,
       url: 'https://crm.example.com/api/whatsapp/webhook/uazapi?key=secret',
       events: ['messages', 'messages_update', 'connection'],
       excludeMessages: ['wasSentByApi'],

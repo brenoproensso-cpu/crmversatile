@@ -68,6 +68,7 @@ export async function registerUazapiWebhook(
       token: creds.token,
     },
     body: JSON.stringify({
+      enabled: true,
       url: webhookUrl,
       events: ['messages', 'messages_update', 'connection'],
       excludeMessages: ['wasSentByApi'],

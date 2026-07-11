@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const configs = [
-  { id: 'row-1', account_id: 'acct-1', user_id: 'user-1', webhook_secret: 'encrypted:secret-1', uazapi_instance_id: 'inst-1' },
-  { id: 'row-2', account_id: 'acct-2', user_id: 'user-2', webhook_secret: 'encrypted:secret-2', uazapi_instance_id: 'inst-2' },
+  { account_id: 'acct-1', user_id: 'user-1', webhook_secret: 'encrypted:secret-1', uazapi_token: 'encrypted:token-1' },
+  { account_id: 'acct-2', user_id: 'user-2', webhook_secret: 'encrypted:secret-2', uazapi_token: 'encrypted:token-2' },
 ]
 
 vi.mock('@/lib/whatsapp/encryption', () => ({
@@ -42,51 +42,57 @@ beforeEach(() => {
 
 describe('POST /api/whatsapp/webhook/uazapi', () => {
   it('rejects a missing key', async () => {
-    const res = await postEvent('', { event: 'messages', instance: 'inst-1', data: {} })
+    const res = await postEvent('', { EventType: 'messages', token: 'token-1', message: {} })
     expect(res.status).toBe(401)
   })
 
   it('rejects a key that matches no config', async () => {
-    const res = await postEvent('wrong-secret', { event: 'messages', instance: 'inst-1', data: {} })
+    const res = await postEvent('wrong-secret', { EventType: 'messages', token: 'token-1', message: {} })
     expect(res.status).toBe(401)
   })
 
-  it('rejects when the instance id does not match the resolved account', async () => {
-    const res = await postEvent('secret-1', { event: 'messages', instance: 'inst-2', data: {} })
+  it('rejects when the payload token does not match the resolved account', async () => {
+    const res = await postEvent('secret-1', { EventType: 'messages', token: 'token-2', message: {} })
     expect(res.status).toBe(401)
   })
 
-  it('resolves the account and ingests a messages event', async () => {
+  it('resolves the account and ingests a real-shaped messages event', async () => {
     const res = await postEvent('secret-1', {
-      event: 'messages',
-      instance: 'inst-1',
-      data: {
-        messageid: 'wamid.1',
-        chatid: '5511999999999@s.whatsapp.net',
-        messageType: 'conversation',
-        text: 'oi',
+      EventType: 'messages',
+      token: 'token-1',
+      instanceName: 'crm',
+      message: {
+        messageid: '3A57290C27829E4717BB',
+        chatid: '556391106266@s.whatsapp.net',
+        messageType: 'Conversation',
+        text: 'Oi',
       },
     })
     expect(res.status).toBe(200)
     expect(ingestInboundMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ accountId: 'acct-1', providerMessageId: 'wamid.1' }),
+      expect.objectContaining({ accountId: 'acct-1', providerMessageId: '3A57290C27829E4717BB' }),
     )
   })
 
-  it('resolves the account and ingests a messages_update event', async () => {
+  it('resolves the account and ingests a real-shaped messages_update batch', async () => {
     const res = await postEvent('secret-2', {
-      event: 'messages_update',
-      instance: 'inst-2',
-      data: { messageid: 'wamid.1', status: 'Delivered' },
+      EventType: 'messages_update',
+      token: 'token-2',
+      event: { MessageIDs: ['id1', 'id2'], Timestamp: 1783738083, Type: 'Delivered' },
+      state: 'Delivered',
     })
     expect(res.status).toBe(200)
+    expect(ingestStatusUpdate).toHaveBeenCalledTimes(2)
     expect(ingestStatusUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ providerMessageId: 'wamid.1', status: 'delivered' }),
+      expect.objectContaining({ providerMessageId: 'id1', status: 'delivered' }),
+    )
+    expect(ingestStatusUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ providerMessageId: 'id2', status: 'delivered' }),
     )
   })
 
   it('acks 200 without ingesting for an unhandled event type', async () => {
-    const res = await postEvent('secret-1', { event: 'connection', instance: 'inst-1', data: {} })
+    const res = await postEvent('secret-1', { EventType: 'connection', token: 'token-1' })
     expect(res.status).toBe(200)
     expect(ingestInboundMessage).not.toHaveBeenCalled()
     expect(ingestStatusUpdate).not.toHaveBeenCalled()

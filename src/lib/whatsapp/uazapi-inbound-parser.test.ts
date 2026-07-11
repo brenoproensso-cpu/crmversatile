@@ -4,17 +4,17 @@ import { parseUazapiMessageEvent, parseUazapiStatusEvent } from './uazapi-inboun
 const BASE = { accountId: 'acct-1', configOwnerUserId: 'user-1' }
 
 describe('parseUazapiMessageEvent', () => {
-  it('parses a plain text message', () => {
+  it('parses a plain text message (real captured shape: capitalized messageType)', () => {
     const result = parseUazapiMessageEvent(
       {
-        messageid: 'wamid.1',
-        chatid: '5511999999999@s.whatsapp.net',
-        senderName: 'Alice',
+        messageid: '3A57290C27829E4717BB',
+        chatid: '556391106266@s.whatsapp.net',
+        senderName: 'Breno Proenço',
         isGroup: false,
         fromMe: false,
-        messageType: 'conversation',
-        messageTimestamp: 1752191999000,
-        text: 'oi',
+        messageType: 'Conversation',
+        messageTimestamp: 1783738251000,
+        text: 'Oi',
       },
       BASE.accountId,
       BASE.configOwnerUserId,
@@ -24,12 +24,12 @@ describe('parseUazapiMessageEvent', () => {
       kind: 'message',
       accountId: 'acct-1',
       configOwnerUserId: 'user-1',
-      senderPhone: '5511999999999',
-      senderName: 'Alice',
-      providerMessageId: 'wamid.1',
-      timestamp: new Date(1752191999000),
+      senderPhone: '556391106266',
+      senderName: 'Breno Proenço',
+      providerMessageId: '3A57290C27829E4717BB',
+      timestamp: new Date(1783738251000),
       contentType: 'text',
-      contentText: 'oi',
+      contentText: 'Oi',
       mediaUrl: null,
       interactiveReplyId: null,
       replyToProviderId: null,
@@ -42,7 +42,7 @@ describe('parseUazapiMessageEvent', () => {
         messageid: 'wamid.2',
         chatid: '5511999999999@s.whatsapp.net',
         senderName: 'Alice',
-        messageType: 'imageMessage',
+        messageType: 'ImageMessage',
         messageTimestamp: 1752191999000,
         text: 'legenda',
         fileURL: 'https://crmversatile.uazapi.com/files/abc.jpg',
@@ -65,7 +65,7 @@ describe('parseUazapiMessageEvent', () => {
         messageid: 'wamid.3',
         chatid: '5511999999999@s.whatsapp.net',
         senderName: 'Alice',
-        messageType: 'reactionMessage',
+        messageType: 'ReactionMessage',
         text: '👍',
         reaction: 'wamid.1',
       },
@@ -85,7 +85,7 @@ describe('parseUazapiMessageEvent', () => {
       {
         messageid: 'wamid.4',
         chatid: '5511999999999@s.whatsapp.net',
-        messageType: 'conversation',
+        messageType: 'Conversation',
         text: 'respondendo',
         quoted: 'wamid.1',
       },
@@ -120,25 +120,46 @@ describe('parseUazapiMessageEvent', () => {
 })
 
 describe('parseUazapiStatusEvent', () => {
-  it('maps Sent/Delivered/Read to the internal ladder', () => {
-    expect(
-      parseUazapiStatusEvent({ messageid: 'wamid.1', status: 'Sent', messageTimestamp: 1752191999000 }),
-    ).toEqual({ providerMessageId: 'wamid.1', status: 'sent', timestamp: new Date(1752191999000) })
+  it('maps a real captured Delivered batch to one update per message id', () => {
+    const results = parseUazapiStatusEvent({
+      EventType: 'messages_update',
+      event: {
+        MessageIDs: ['2A82573383C61D4C18A0', '2A65CBE478E7C52F97E1'],
+        Timestamp: 1783738083,
+        Type: 'Delivered',
+      },
+      state: 'Delivered',
+    })
 
-    expect(parseUazapiStatusEvent({ messageid: 'wamid.1', status: 'Delivered' })?.status).toBe('delivered')
-    expect(parseUazapiStatusEvent({ messageid: 'wamid.1', status: 'Read' })?.status).toBe('read')
+    expect(results).toEqual([
+      { providerMessageId: '2A82573383C61D4C18A0', status: 'delivered', timestamp: new Date(1783738083 * 1000) },
+      { providerMessageId: '2A65CBE478E7C52F97E1', status: 'delivered', timestamp: new Date(1783738083 * 1000) },
+    ])
+  })
+
+  it('maps Sent/Read', () => {
+    expect(
+      parseUazapiStatusEvent({ event: { MessageIDs: ['id1'] }, state: 'Sent' })[0]?.status,
+    ).toBe('sent')
+    expect(
+      parseUazapiStatusEvent({ event: { MessageIDs: ['id1'] }, state: 'Read' })[0]?.status,
+    ).toBe('read')
   })
 
   it('maps Canceled and Failed to failed', () => {
-    expect(parseUazapiStatusEvent({ messageid: 'wamid.1', status: 'Canceled' })?.status).toBe('failed')
-    expect(parseUazapiStatusEvent({ messageid: 'wamid.1', status: 'Failed' })?.status).toBe('failed')
+    expect(
+      parseUazapiStatusEvent({ event: { MessageIDs: ['id1'] }, state: 'Canceled' })[0]?.status,
+    ).toBe('failed')
+    expect(
+      parseUazapiStatusEvent({ event: { MessageIDs: ['id1'] }, state: 'Failed' })[0]?.status,
+    ).toBe('failed')
   })
 
   it('ignores Queued (no forward-ladder meaning)', () => {
-    expect(parseUazapiStatusEvent({ messageid: 'wamid.1', status: 'Queued' })).toBeNull()
+    expect(parseUazapiStatusEvent({ event: { MessageIDs: ['id1'] }, state: 'Queued' })).toEqual([])
   })
 
-  it('ignores a payload with no messageid', () => {
-    expect(parseUazapiStatusEvent({ status: 'Sent' })).toBeNull()
+  it('ignores a payload with no MessageIDs', () => {
+    expect(parseUazapiStatusEvent({ state: 'Sent' })).toEqual([])
   })
 })
