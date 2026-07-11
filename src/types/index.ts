@@ -269,9 +269,10 @@ export interface MessageReaction {
 export interface WhatsAppConfig {
   id: string;
   user_id: string;
-  phone_number_id: string;
+  provider: 'meta' | 'uazapi';
+  phone_number_id?: string;
   waba_id?: string;
-  access_token: string;
+  access_token?: string;
   verify_token?: string;
   status: 'connected' | 'disconnected';
   connected_at?: string;
@@ -285,6 +286,9 @@ export interface WhatsAppConfig {
   subscribed_apps_at?: string;
   /** Last error from /register; cleared on success. */
   last_registration_error?: string;
+  uazapi_server_url?: string;
+  uazapi_instance_id?: string;
+  uazapi_token?: string;
 }
 
 // Raw Meta status enum. We persist this verbatim from Meta (sync + webhook)
