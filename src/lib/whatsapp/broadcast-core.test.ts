@@ -25,6 +25,7 @@ const uazapiProviderSpies = {
   sendText: vi.fn(async () => ({ messageId: 'uazapi-msg-1' })),
   sendMedia: vi.fn(async () => ({ messageId: 'uazapi-msg-2' })),
   sendReaction: vi.fn(async () => ({ messageId: 'uazapi-msg-3' })),
+  sendInteractive: vi.fn(async () => ({ messageId: 'uazapi-msg-4' })),
 };
 vi.mock('@/lib/whatsapp/provider', () => ({
   getWhatsAppProvider: vi.fn(() => uazapiProviderSpies),
