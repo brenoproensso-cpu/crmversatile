@@ -257,6 +257,33 @@ Invalid phone numbers are dropped and counted as `rejected`. Response
 }
 ```
 
+For accounts connected via **UAZAPI** instead of the Meta Cloud API,
+there is no template/24h-window concept — send free text and an
+optional single media attachment instead of `template_name`:
+
+```bash
+curl -X POST https://your-crm.example.com/api/v1/broadcasts \
+  -H "Authorization: Bearer wacrm_live_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "name": "July promo",
+        "message_text": "Confira nossa promoção de julho!",
+        "media": { "kind": "image", "url": "https://example.com/promo.jpg" },
+        "recipients": [
+          { "to": "+14155550123" },
+          { "to": "+14155550124" }
+        ]
+      }'
+```
+
+`media` is optional; when set, `kind` is one of `image` / `video` /
+`document` / `audio`, and `url` must be a publicly fetchable link. The
+same text and attachment go to every recipient — there is no
+per-recipient `params` substitution in this mode (that's a
+template-only feature). Which shape to send is determined by the
+account's connected provider, not by the request — a template-shaped
+body against a UAZAPI account (or vice versa) is rejected with `400`.
+
 ### `GET /api/v1/broadcasts/{id}`
 
 Broadcast status + counts. Scope: `broadcasts:send`. `status` moves

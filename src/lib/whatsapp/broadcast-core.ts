@@ -1,15 +1,23 @@
 // ============================================================
-// Public-API broadcast core.
+// Public-API + dashboard broadcast core.
 //
-// Splits a broadcast into two phases so the HTTP route can persist +
-// acknowledge fast and fan out afterwards (in `after()`):
+// Splits a broadcast into two phases so callers can persist +
+// acknowledge fast and fan out afterwards:
 //
 //   createBroadcast()  — validate, resolve contacts, insert the
 //                        `broadcasts` row + `broadcast_recipients`
 //                        rows (status 'pending'), return a plan.
-//   deliverBroadcast() — send each recipient's template via Meta
-//                        (phone-variant retry), stamp each recipient
-//                        row + the aggregate counts, finalize status.
+//   deliverBroadcast() — send each recipient (phone-variant retry),
+//                        stamp each recipient row + the aggregate
+//                        counts, finalize status.
+//
+// A broadcast is either a Meta approved-template send or a UAZAPI
+// free-text (+ optional single media attachment) send — never both.
+// `BroadcastSendContext.kind` picks the branch; `sendBroadcastRecipient()`
+// is the one place that actually calls out to Meta/UAZAPI, shared by
+// deliverBroadcast() here AND by the dashboard's
+// `/api/whatsapp/broadcast` route (which owns its own recipient rows,
+// created client-side, so it can't just call createBroadcast()).
 //
 // Recipient rows carry `whatsapp_message_id`, so the inbound webhook's
 // status handler (which matches on that column) updates delivered/read
@@ -18,7 +26,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { sendTemplateMessage } from '@/lib/whatsapp/meta-api';
+import { sendTemplateMessage, type MediaKind } from '@/lib/whatsapp/meta-api';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import {
   sanitizePhoneForMeta,
@@ -29,6 +37,8 @@ import {
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
 import type { MessageTemplate } from '@/types';
 import { findOrCreateContact } from '@/lib/api/v1/contacts';
+import { getWhatsAppProvider, type WhatsAppProvider, type WhatsAppConfigRow } from '@/lib/whatsapp/provider';
+import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder';
 
 /** Thrown by createBroadcast on a caller-visible failure; route maps it. */
 export class BroadcastError extends Error {
@@ -45,14 +55,25 @@ export class BroadcastError extends Error {
 export interface BroadcastRecipientInput {
   /** E.164 phone. */
   to: string;
-  /** Positional body params for the template ({{1}}, {{2}}…). */
+  /** Positional body params for the template ({{1}}, {{2}}…). Meta-only. */
   params?: string[];
+}
+
+export interface BroadcastMedia {
+  kind: MediaKind;
+  url: string;
+  filename?: string;
 }
 
 export interface CreateBroadcastParams {
   name?: string | null;
-  templateName: string;
+  /** Required for Meta accounts. */
+  templateName?: string;
   templateLanguage?: string | null;
+  /** Required for UAZAPI accounts. */
+  messageText?: string;
+  /** Optional, UAZAPI accounts only. */
+  media?: BroadcastMedia | null;
   recipients: BroadcastRecipientInput[];
 }
 
@@ -62,19 +83,86 @@ interface PlannedRecipient {
   params: string[];
 }
 
+/**
+ * Everything `sendBroadcastRecipient` needs to send ONE recipient,
+ * built once per broadcast (not per recipient). `kind` picks which set
+ * of fields is populated — the other set is left undefined.
+ */
+export interface BroadcastSendContext {
+  kind: 'template' | 'freeText';
+  // 'template' (Meta)
+  phoneNumberId?: string;
+  accessToken?: string;
+  templateName?: string;
+  templateLanguage?: string;
+  templateRow?: MessageTemplate | null;
+  // 'freeText' (UAZAPI)
+  provider?: WhatsAppProvider;
+  messageText?: string;
+  media?: BroadcastMedia | null;
+}
+
 export interface BroadcastPlan {
   broadcastId: string;
-  templateName: string;
-  templateLanguage: string;
-  phoneNumberId: string;
-  accessToken: string;
-  templateRow: MessageTemplate | null;
+  sendContext: BroadcastSendContext;
   planned: PlannedRecipient[];
   /** Phones rejected up front (invalid E.164) — counted as failed. */
   rejected: number;
 }
 
 const MAX_RECIPIENTS = 1000;
+
+/**
+ * Send to ONE recipient, retrying across phone-number variants on a
+ * Meta "recipient not allowed" error (a sandbox-number quirk — see
+ * `isRecipientNotAllowedError`). UAZAPI never throws that specific
+ * error, so its branch effectively tries once. Throws on total
+ * failure (every variant exhausted); callers decide how to record
+ * that (a DB row update, an HTTP response entry, …).
+ */
+export async function sendBroadcastRecipient(
+  ctx: BroadcastSendContext,
+  recipient: { phone: string; params?: string[]; messageParams?: SendTimeParams },
+): Promise<{ messageId: string }> {
+  const variants = phoneVariants(recipient.phone);
+  let lastError: string | null = null;
+
+  for (const variant of variants) {
+    try {
+      if (ctx.kind === 'freeText') {
+        const provider = ctx.provider!;
+        const result = ctx.media
+          ? await provider.sendMedia({
+              to: variant,
+              kind: ctx.media.kind,
+              link: ctx.media.url,
+              caption: ctx.messageText || undefined,
+              filename: ctx.media.filename,
+            })
+          : await provider.sendText({ to: variant, text: ctx.messageText! });
+        return { messageId: result.messageId };
+      }
+
+      const result = await sendTemplateMessage({
+        phoneNumberId: ctx.phoneNumberId!,
+        accessToken: ctx.accessToken!,
+        to: variant,
+        templateName: ctx.templateName!,
+        language: ctx.templateLanguage!,
+        template: ctx.templateRow ?? undefined,
+        messageParams: recipient.messageParams,
+        params: recipient.params ?? [],
+      });
+      return { messageId: result.messageId };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      lastError = message;
+      if (!isRecipientNotAllowedError(message)) break;
+    }
+  }
+
+  throw new Error(lastError || 'Unknown error');
+}
 
 /**
  * Validate + persist a broadcast, resolving each recipient to a
@@ -91,9 +179,6 @@ export async function createBroadcast(
   const { name, templateName, recipients } = params;
   const templateLanguage = params.templateLanguage || 'en_US';
 
-  if (!templateName) {
-    throw new BroadcastError('bad_request', "'template_name' is required", 400);
-  }
   if (!Array.isArray(recipients) || recipients.length === 0) {
     throw new BroadcastError(
       'bad_request',
@@ -109,8 +194,6 @@ export async function createBroadcast(
     );
   }
 
-  // Config (fail fast + provides the audit trail owner already resolved
-  // by the caller). Meta send needs phone_number_id + decrypted token.
   const { data: config, error: configError } = await db
     .from('whatsapp_config')
     .select('*')
@@ -123,25 +206,58 @@ export async function createBroadcast(
       400
     );
   }
-  const accessToken = decrypt(config.access_token);
 
-  // Template row (once) for header/button components; guard a
-  // malformed local row rather than N identical opaque failures.
-  const { data: rawTemplateRow } = await db
-    .from('message_templates')
-    .select('*')
-    .eq('account_id', accountId)
-    .eq('name', templateName)
-    .eq('language', templateLanguage)
-    .maybeSingle();
-  if (rawTemplateRow && !isMessageTemplate(rawTemplateRow)) {
-    throw new BroadcastError(
-      'template_malformed',
-      'Template row is malformed locally — run "Sync from Meta" in Settings to repair it before broadcasting.',
-      500
-    );
+  const isUazapi = (config as WhatsAppConfigRow).provider === 'uazapi';
+  let sendContext: BroadcastSendContext;
+  let templateNameForRow: string | null = null;
+
+  if (isUazapi) {
+    const messageText = (params.messageText ?? '').trim();
+    if (!messageText) {
+      throw new BroadcastError(
+        'bad_request',
+        "'message_text' is required for a UAZAPI broadcast",
+        400
+      );
+    }
+    sendContext = {
+      kind: 'freeText',
+      provider: getWhatsAppProvider(config as WhatsAppConfigRow),
+      messageText,
+      media: params.media ?? null,
+    };
+  } else {
+    if (!templateName) {
+      throw new BroadcastError('bad_request', "'template_name' is required", 400);
+    }
+    const accessToken = decrypt(config.access_token);
+
+    // Template row (once) for header/button components; guard a
+    // malformed local row rather than N identical opaque failures.
+    const { data: rawTemplateRow } = await db
+      .from('message_templates')
+      .select('*')
+      .eq('account_id', accountId)
+      .eq('name', templateName)
+      .eq('language', templateLanguage)
+      .maybeSingle();
+    if (rawTemplateRow && !isMessageTemplate(rawTemplateRow)) {
+      throw new BroadcastError(
+        'template_malformed',
+        'Template row is malformed locally — run "Sync from Meta" in Settings to repair it before broadcasting.',
+        500
+      );
+    }
+    sendContext = {
+      kind: 'template',
+      phoneNumberId: config.phone_number_id,
+      accessToken,
+      templateName,
+      templateLanguage,
+      templateRow: (rawTemplateRow as MessageTemplate | null) ?? null,
+    };
+    templateNameForRow = templateName;
   }
-  const templateRow = (rawTemplateRow as MessageTemplate | null) ?? null;
 
   // Resolve each recipient to a contact. Invalid phones are dropped
   // (counted as rejected) rather than aborting the whole broadcast.
@@ -198,9 +314,13 @@ export async function createBroadcast(
     .insert({
       account_id: accountId,
       user_id: auditUserId,
-      name: name || `API broadcast (${templateName})`,
-      template_name: templateName,
+      name: name || (isUazapi ? 'API broadcast (free text)' : `API broadcast (${templateName})`),
+      template_name: templateNameForRow,
       template_language: templateLanguage,
+      message_text: isUazapi ? sendContext.messageText : null,
+      media_url: isUazapi ? (sendContext.media?.url ?? null) : null,
+      media_kind: isUazapi ? (sendContext.media?.kind ?? null) : null,
+      media_filename: isUazapi ? (sendContext.media?.filename ?? null) : null,
       status: 'sending',
       total_recipients: deduped.length,
     })
@@ -236,28 +356,24 @@ export async function createBroadcast(
 
   return {
     broadcastId: broadcast.id,
-    templateName,
-    templateLanguage,
-    phoneNumberId: config.phone_number_id,
-    accessToken,
-    templateRow,
+    sendContext,
     planned,
     rejected,
   };
 }
 
 /**
- * Fan out a {@link BroadcastPlan}: send each recipient's template
- * (phone-variant retry) and stamp its `broadcast_recipients` row.
- * Best-effort per recipient — one failure never aborts the rest.
- * Designed to run inside `after()`.
+ * Fan out a {@link BroadcastPlan}: send each recipient (phone-variant
+ * retry via {@link sendBroadcastRecipient}) and stamp its
+ * `broadcast_recipients` row. Best-effort per recipient — one failure
+ * never aborts the rest. Designed to run inside `after()`.
  *
  * The per-status count columns on `broadcasts` are owned by the DB
  * aggregate trigger (migrations 003/005): each recipient-row update
- * below advances them automatically, and later Meta delivery/read
- * webhooks keep advancing them. We therefore never write those columns
- * here — only the terminal `status` — otherwise a manual value would
- * race and clobber the trigger-maintained counts.
+ * below advances them automatically, and later delivery/read webhooks
+ * keep advancing them. We therefore never write those columns here —
+ * only the terminal `status` — otherwise a manual value would race and
+ * clobber the trigger-maintained counts.
  */
 export async function deliverBroadcast(
   db: SupabaseClient,
@@ -266,49 +382,24 @@ export async function deliverBroadcast(
   let sentCount = 0;
 
   for (const recipient of plan.planned) {
-    const variants = phoneVariants(recipient.phone);
-    let sentMessageId: string | null = null;
-    let lastError: string | null = null;
-
-    for (const variant of variants) {
-      try {
-        const result = await sendTemplateMessage({
-          phoneNumberId: plan.phoneNumberId,
-          accessToken: plan.accessToken,
-          to: variant,
-          templateName: plan.templateName,
-          language: plan.templateLanguage,
-          template: plan.templateRow ?? undefined,
-          params: recipient.params,
-        });
-        sentMessageId = result.messageId;
-        lastError = null;
-        break;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
-        lastError = message;
-        // Only a "recipient not allowed" error is worth another variant.
-        if (!isRecipientNotAllowedError(message)) break;
-      }
-    }
-
-    if (sentMessageId) {
+    try {
+      const result = await sendBroadcastRecipient(plan.sendContext, recipient);
       sentCount++;
       await db
         .from('broadcast_recipients')
         .update({
           status: 'sent',
           sent_at: new Date().toISOString(),
-          whatsapp_message_id: sentMessageId,
+          whatsapp_message_id: result.messageId,
           error_message: null,
         })
         .eq('id', recipient.recipientRowId);
-    } else {
+    } catch (error) {
       await db
         .from('broadcast_recipients')
         .update({
           status: 'failed',
-          error_message: lastError || 'Unknown error',
+          error_message: error instanceof Error ? error.message : 'Unknown error',
         })
         .eq('id', recipient.recipientRowId);
     }

@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { MessageTemplate } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -26,7 +25,10 @@ interface AudienceConfig {
 interface Step4Props {
   name: string;
   onNameChange: (name: string) => void;
-  template: MessageTemplate;
+  /** Template name (Meta) or a truncated free-text preview (UAZAPI). */
+  summaryLabel: string;
+  /** Template language (Meta) or a fixed "Free text" label (UAZAPI). */
+  summarySublabel: string;
   audience: AudienceConfig;
   onSend: () => void;
   onSaveDraft?: () => void;
@@ -38,7 +40,8 @@ interface Step4Props {
 export function Step4ScheduleSend({
   name,
   onNameChange,
-  template,
+  summaryLabel,
+  summarySublabel,
   audience,
   onSend,
   onSaveDraft,
@@ -118,7 +121,7 @@ export function Step4ScheduleSend({
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div>
             <p className="text-xs text-muted-foreground">{t('scheduleSend.template')}</p>
-            <p className="text-foreground">{template.name}</p>
+            <p className="text-foreground">{summaryLabel}</p>
           </div>
           <div>
             <p className="text-xs text-muted-foreground">{t('scheduleSend.audience')}</p>
@@ -139,7 +142,7 @@ export function Step4ScheduleSend({
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Language</p>
-            <p className="text-foreground">{template.language ?? 'en_US'}</p>
+            <p className="text-foreground">{summarySublabel}</p>
           </div>
         </div>
       </div>
@@ -205,8 +208,8 @@ export function Step4ScheduleSend({
               <DialogDescription className="text-muted-foreground">
                 You are about to send this broadcast to{' '}
                 <span className="font-medium text-popover-foreground">{estimatedReach.toLocaleString()}</span>{' '}
-                contacts using the{' '}
-                <span className="font-medium text-popover-foreground">{template.name}</span> template.
+                contacts (
+                <span className="font-medium text-popover-foreground">{summaryLabel}</span>).
                 This action cannot be undone.
               </DialogDescription>
             </DialogHeader>

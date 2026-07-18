@@ -1,25 +1,22 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
 import { MessageTemplate } from '@/types';
 import { Step1ChooseTemplate } from '@/components/broadcasts/step1-choose-template';
+import { Step1ComposeMessage, type ComposeMediaAttachment } from '@/components/broadcasts/step1-compose-message';
 import { Step2SelectAudience } from '@/components/broadcasts/step2-select-audience';
 import { Step3Personalize } from '@/components/broadcasts/step3-personalize';
 import { Step4ScheduleSend } from '@/components/broadcasts/step4-schedule-send';
 import { useBroadcastSending } from '@/hooks/use-broadcast-sending';
-import { Check } from 'lucide-react';
+import { Check, Loader2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 
-const steps = [
-  { label: 'template', key: 'template' },
-  { label: 'audience', key: 'audience' },
-  { label: 'personalize', key: 'personalize' },
-  { label: 'send', key: 'send' },
-] as const;
+const STEPS_META = ['template', 'audience', 'personalize', 'send'] as const;
+const STEPS_UAZAPI = ['compose', 'audience', 'send'] as const;
 
 export default function NewBroadcastPage() {
   const router = useRouter();
@@ -27,8 +24,30 @@ export default function NewBroadcastPage() {
   const { accountId } = useAuth();
   const { createAndSendBroadcast, isProcessing, progress } = useBroadcastSending();
 
+  const [provider, setProvider] = useState<'meta' | 'uazapi' | null>(null);
+  const [providerLoading, setProviderLoading] = useState(true);
+
+  useEffect(() => {
+    if (!accountId) return;
+    async function fetchProvider() {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from('whatsapp_config')
+        .select('provider')
+        .eq('account_id', accountId)
+        .maybeSingle();
+      setProvider((data?.provider as 'meta' | 'uazapi' | undefined) ?? 'meta');
+      setProviderLoading(false);
+    }
+    fetchProvider();
+  }, [accountId]);
+
+  const steps = provider === 'uazapi' ? STEPS_UAZAPI : STEPS_META;
+
   const [currentStep, setCurrentStep] = useState(0);
   const [template, setTemplate] = useState<MessageTemplate | null>(null);
+  const [messageText, setMessageText] = useState('');
+  const [media, setMedia] = useState<ComposeMediaAttachment | null>(null);
   const [audience, setAudience] = useState<{
     type: 'all' | 'tags' | 'custom_field' | 'csv';
     tagIds?: string[];
@@ -46,23 +65,36 @@ export default function NewBroadcastPage() {
   const [headerMediaUrl, setHeaderMediaUrl] = useState('');
   const [name, setName] = useState('');
 
-  async function handleSend() {
-    if (!template) return;
+  const stepKey = steps[currentStep];
 
+  async function handleSend() {
     try {
-      const broadcastId = await createAndSendBroadcast({
-        name,
-        template,
-        audience: {
-          type: audience.type,
-          tagIds: audience.tagIds,
-          customField: audience.customField,
-          csvContacts: audience.csvContacts,
-          excludeTagIds: audience.excludeTagIds,
-        },
-        variables,
-        headerMediaUrl,
-      });
+      const commonAudience = {
+        type: audience.type,
+        tagIds: audience.tagIds,
+        customField: audience.customField,
+        csvContacts: audience.csvContacts,
+        excludeTagIds: audience.excludeTagIds,
+      };
+
+      const broadcastId = await createAndSendBroadcast(
+        provider === 'uazapi'
+          ? {
+              mode: 'freeText',
+              name,
+              audience: commonAudience,
+              messageText,
+              media: media ? { kind: media.kind, url: media.url, filename: media.filename } : null,
+            }
+          : {
+              mode: 'template',
+              name,
+              template: template!,
+              audience: commonAudience,
+              variables,
+              headerMediaUrl,
+            },
+      );
       router.push(`/broadcasts/${broadcastId}`);
     } catch (err) {
       // Previously swallowed with console.error — the wizard would
@@ -83,7 +115,12 @@ export default function NewBroadcastPage() {
    * A full resume-draft UX is a future polish.
    */
   async function handleSaveDraft() {
-    if (!template || !name.trim()) {
+    const hasContent = provider === 'uazapi' ? messageText.trim().length > 0 : Boolean(template);
+    if (!hasContent) {
+      toast.error(t('toastNoContent'));
+      return;
+    }
+    if (!name.trim()) {
       toast.error(t('toastGiveName'));
       return;
     }
@@ -105,9 +142,13 @@ export default function NewBroadcastPage() {
       user_id: user.id,
       account_id: accountId,
       name: name.trim(),
-      template_name: template.name,
-      template_language: template.language ?? 'en_US',
-      template_variables: variables,
+      ...(provider === 'uazapi'
+        ? { message_text: messageText }
+        : {
+            template_name: template!.name,
+            template_language: template!.language ?? 'en_US',
+            template_variables: variables,
+          }),
       audience_filter: {
         type: audience.type,
         tagIds: audience.tagIds,
@@ -129,6 +170,14 @@ export default function NewBroadcastPage() {
     router.push('/broadcasts');
   }
 
+  if (providerLoading) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-3xl space-y-8">
       {/* Header */}
@@ -146,7 +195,7 @@ export default function NewBroadcastPage() {
           const isCompleted = index < currentStep;
 
           return (
-            <div key={step.key} className="flex flex-1 items-center">
+            <div key={step} className="flex flex-1 items-center">
               <div className="flex items-center gap-2">
                 <div
                   className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-medium transition-all ${
@@ -164,7 +213,7 @@ export default function NewBroadcastPage() {
                     isActive ? 'text-foreground' : isCompleted ? 'text-primary' : 'text-muted-foreground'
                   }`}
                 >
-                  {t(`steps.${step.label}`)}
+                  {t(`steps.${step}`)}
                 </span>
               </div>
               {index < steps.length - 1 && (
@@ -188,42 +237,57 @@ export default function NewBroadcastPage() {
             pointerEvents: isProcessing ? 'none' : 'auto',
           }}
         >
-          {currentStep === 0 && (
+          {stepKey === 'template' && (
             <Step1ChooseTemplate
               selectedTemplate={template}
               onSelect={setTemplate}
-              onNext={() => setCurrentStep(1)}
+              onNext={() => setCurrentStep(currentStep + 1)}
               onBack={() => router.push('/broadcasts')}
             />
           )}
-          {currentStep === 1 && (
+          {stepKey === 'compose' && (
+            <Step1ComposeMessage
+              messageText={messageText}
+              onMessageTextChange={setMessageText}
+              media={media}
+              onMediaChange={setMedia}
+              onNext={() => setCurrentStep(currentStep + 1)}
+              onBack={() => router.push('/broadcasts')}
+            />
+          )}
+          {stepKey === 'audience' && (
             <Step2SelectAudience
               audience={audience}
               onUpdate={setAudience}
-              onNext={() => setCurrentStep(2)}
-              onBack={() => setCurrentStep(0)}
+              onNext={() => setCurrentStep(currentStep + 1)}
+              onBack={() => setCurrentStep(currentStep - 1)}
             />
           )}
-          {currentStep === 2 && template && (
+          {stepKey === 'personalize' && template && (
             <Step3Personalize
               template={template}
               variables={variables}
               onUpdate={setVariables}
               headerMediaUrl={headerMediaUrl}
               onHeaderMediaUrlChange={setHeaderMediaUrl}
-              onNext={() => setCurrentStep(3)}
-              onBack={() => setCurrentStep(1)}
+              onNext={() => setCurrentStep(currentStep + 1)}
+              onBack={() => setCurrentStep(currentStep - 1)}
             />
           )}
-          {currentStep === 3 && template && (
+          {stepKey === 'send' && (
             <Step4ScheduleSend
               name={name}
               onNameChange={setName}
-              template={template}
+              summaryLabel={
+                provider === 'uazapi' ? messageText.slice(0, 60) || '—' : (template?.name ?? '—')
+              }
+              summarySublabel={
+                provider === 'uazapi' ? t('freeTextLabel') : (template?.language ?? 'en_US')
+              }
               audience={audience}
               onSend={handleSend}
               onSaveDraft={handleSaveDraft}
-              onBack={() => setCurrentStep(2)}
+              onBack={() => setCurrentStep(currentStep - 1)}
               isProcessing={isProcessing}
               progress={progress}
             />

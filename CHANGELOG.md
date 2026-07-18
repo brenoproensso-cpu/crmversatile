@@ -9,6 +9,42 @@ Versions follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Pre-1.0, `MINOR` bumps cover new modules; `PATCH` bumps cover bug fixes
 and polish.
 
+## [0.9.0] — 2026-07-17
+
+Adds **UAZAPI** as a second WhatsApp connection option alongside the
+Meta Cloud API — QR-code connect, no approved-template requirement,
+and now full Broadcast support.
+
+> **Migration required:** apply, in order: `supabase/migrations/036_uazapi_provider.sql`
+> (adds `whatsapp_config.provider` + UAZAPI credential columns) and
+> `supabase/migrations/037_broadcast_free_text.sql` (relaxes
+> `broadcasts.template_name` to nullable, adds `message_text`/`media_*`
+> columns).
+
+### Added
+
+- **UAZAPI as a connection option.** Under **Settings → WhatsApp**,
+  choose "UAZAPI" instead of the Meta Cloud API: paste your instance's
+  server URL + token, scan the QR code, done — no Meta Business
+  Manager, no app review, no approved templates. Sending (text, media,
+  reactions) and receiving (messages, reactions, delivery/read status)
+  both work exactly as they do for Meta accounts, backed by a shared
+  `WhatsAppProvider` abstraction (`getWhatsAppProvider`) so the rest of
+  the CRM — Inbox, Flows, Automations — doesn't know which provider is
+  behind a given account.
+- **Free-text Broadcasts for UAZAPI accounts.** Since UAZAPI has no
+  template/24h-window concept, the Broadcast wizard shows a text +
+  optional single media attachment composer instead of the template
+  gallery for these accounts, and skips the personalization step (no
+  per-recipient variables in this version). Meta accounts keep the
+  existing approved-template flow unchanged.
+
+### Changed
+
+- `POST /api/v1/broadcasts` accepts a `message_text`/`media` body
+  shape for UAZAPI accounts as an alternative to `template_name` — see
+  `docs/public-api.md`.
+
 ## [0.8.0] — 2026-07-08
 
 Polishes the AI auto-reply bot: it's now **visible and controllable from

@@ -34,19 +34,34 @@ export type VariableMapping =
   | { type: 'field'; value: string }
   | { type: 'custom_field'; value: string };
 
-interface BroadcastPayload {
-  name: string;
-  template: MessageTemplate;
-  audience: AudienceConfig;
-  variables: Record<string, VariableMapping>;
-  /**
-   * Media URL for an IMAGE/VIDEO/DOCUMENT header. Required at send
-   * time for media-header templates — Meta rejects the send without
-   * it. Passed through as `messageParams.headerMediaUrl`; the builder
-   * falls back to the template's stored URL only when this is empty.
-   */
-  headerMediaUrl?: string;
+export interface BroadcastMediaAttachment {
+  kind: 'image' | 'video' | 'document' | 'audio';
+  url: string;
+  filename?: string;
 }
+
+export type BroadcastPayload =
+  | {
+      mode: 'template';
+      name: string;
+      template: MessageTemplate;
+      audience: AudienceConfig;
+      variables: Record<string, VariableMapping>;
+      /**
+       * Media URL for an IMAGE/VIDEO/DOCUMENT header. Required at send
+       * time for media-header templates — Meta rejects the send without
+       * it. Passed through as `messageParams.headerMediaUrl`; the builder
+       * falls back to the template's stored URL only when this is empty.
+       */
+      headerMediaUrl?: string;
+    }
+  | {
+      mode: 'freeText';
+      name: string;
+      audience: AudienceConfig;
+      messageText: string;
+      media?: BroadcastMediaAttachment | null;
+    };
 
 interface UseBroadcastSendingReturn {
   createAndSendBroadcast: (payload: BroadcastPayload) => Promise<string>;
@@ -359,9 +374,18 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
           user_id: user.id,
           account_id: accountId,
           name: payload.name,
-          template_name: payload.template.name,
-          template_language: payload.template.language ?? 'en_US',
-          template_variables: payload.variables,
+          ...(payload.mode === 'template'
+            ? {
+                template_name: payload.template.name,
+                template_language: payload.template.language ?? 'en_US',
+                template_variables: payload.variables,
+              }
+            : {
+                message_text: payload.messageText,
+                media_url: payload.media?.url ?? null,
+                media_kind: payload.media?.kind ?? null,
+                media_filename: payload.media?.filename ?? null,
+              }),
           audience_filter: {
             type: payload.audience.type,
             tagIds: payload.audience.tagIds,
@@ -444,13 +468,13 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
       // Media-header templates (image/video/document) require a media
       // URL on every send. Collected in the personalize step and applied
       // to all recipients; falls back to the template's stored URL on the
-      // server when omitted.
-      const headerType = payload.template.header_type;
+      // server when omitted. Meaningless in 'freeText' mode.
+      const headerType = payload.mode === 'template' ? payload.template.header_type : null;
       const isMediaHeader =
         headerType === 'image' ||
         headerType === 'video' ||
         headerType === 'document';
-      const headerMediaUrl = payload.headerMediaUrl?.trim();
+      const headerMediaUrl = payload.mode === 'template' ? payload.headerMediaUrl?.trim() : undefined;
       const messageParams =
         isMediaHeader && headerMediaUrl ? { headerMediaUrl } : undefined;
 
@@ -461,13 +485,14 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
           .filter((r) => r.contact?.phone)
           .map((r) => ({
             phone: r.contact!.phone as string,
-            params: r.contact
-              ? resolveVariables(
-                  payload.variables,
-                  r.contact,
-                  customValueIndex.get(r.contact.id),
-                )
-              : [],
+            params:
+              payload.mode === 'template' && r.contact
+                ? resolveVariables(
+                    payload.variables,
+                    r.contact,
+                    customValueIndex.get(r.contact.id),
+                  )
+                : [],
             ...(messageParams ? { messageParams } : {}),
           }));
 
@@ -477,11 +502,19 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
           const res = await fetch('/api/whatsapp/broadcast', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              recipients: apiRecipients,
-              template_name: payload.template.name,
-              template_language: payload.template.language ?? 'en_US',
-            }),
+            body: JSON.stringify(
+              payload.mode === 'template'
+                ? {
+                    recipients: apiRecipients,
+                    template_name: payload.template.name,
+                    template_language: payload.template.language ?? 'en_US',
+                  }
+                : {
+                    recipients: apiRecipients,
+                    message_text: payload.messageText,
+                    media: payload.media ?? undefined,
+                  },
+            ),
           });
 
           const data = await res.json();
