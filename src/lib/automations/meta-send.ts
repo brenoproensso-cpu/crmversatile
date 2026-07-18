@@ -141,14 +141,18 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
     throw new Error('WhatsApp not configured for this account')
   }
 
-  const accessToken = decrypt(config.access_token)
   const provider = getWhatsAppProvider(config)
 
   const attempt = async (phone: string): Promise<string> => {
     if (input.kind === 'template') {
+      // Templates are a Meta-specific concept (uazapi has no equivalent),
+      // so this branch only ever runs for Meta-provider configs — decrypt
+      // lazily here rather than unconditionally above, where it would
+      // throw on a null access_token for uazapi accounts (which don't
+      // populate that column).
       const r = await sendTemplateMessage({
         phoneNumberId: config.phone_number_id,
-        accessToken,
+        accessToken: decrypt(config.access_token),
         to: phone,
         templateName: input.templateName,
         language: input.language,
