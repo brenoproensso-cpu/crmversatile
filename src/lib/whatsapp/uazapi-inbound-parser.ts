@@ -19,6 +19,15 @@ export interface UazapiMessagePayload {
   quoted?: string
   reaction?: string
   fileURL?: string
+  /**
+   * Id of the button or list row the customer tapped, when this message
+   * is a reply to a `/send/menu` prompt we sent. Documented on the
+   * `Message` schema in UAZAPI's OpenAPI spec ("ID do botão ou item de
+   * lista selecionado") — this is what makes the round trip back to the
+   * `id` half of the `"title|id"` choices we send in `sendUazapiButtons`
+   * / `sendUazapiList`.
+   */
+  buttonOrListid?: string
 }
 
 /**
@@ -108,7 +117,7 @@ export function parseUazapiMessageEvent(
     contentType,
     contentText: data.text || null,
     mediaUrl: data.fileURL || null,
-    interactiveReplyId: null,
+    interactiveReplyId: data.buttonOrListid || null,
     replyToProviderId: data.quoted || null,
   }
 }

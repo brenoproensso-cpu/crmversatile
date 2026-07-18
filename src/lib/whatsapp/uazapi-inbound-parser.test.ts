@@ -96,6 +96,25 @@ describe('parseUazapiMessageEvent', () => {
     expect(result).toMatchObject({ replyToProviderId: 'wamid.1' })
   })
 
+  it('carries buttonOrListid as interactiveReplyId when the customer taps a button/list row', () => {
+    const result = parseUazapiMessageEvent(
+      {
+        messageid: 'wamid.7',
+        chatid: '5511999999999@s.whatsapp.net',
+        messageType: 'ButtonsResponseMessage',
+        text: 'Suporte Técnico',
+        buttonOrListid: 'suporte',
+      },
+      BASE.accountId,
+      BASE.configOwnerUserId,
+    )
+
+    expect(result).toMatchObject({
+      contentText: 'Suporte Técnico',
+      interactiveReplyId: 'suporte',
+    })
+  })
+
   it('drops group messages', () => {
     const result = parseUazapiMessageEvent(
       { messageid: 'wamid.5', chatid: '123-456@g.us', isGroup: true, text: 'oi grupo' },
