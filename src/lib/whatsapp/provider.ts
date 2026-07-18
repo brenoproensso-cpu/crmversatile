@@ -1,11 +1,16 @@
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
+  sendInteractiveButtons,
+  sendInteractiveList,
   sendMediaMessage,
   sendReactionMessage,
   sendTextMessage,
   type MediaKind,
 } from '@/lib/whatsapp/meta-api'
+import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive'
 import {
+  sendUazapiButtons,
+  sendUazapiList,
   sendUazapiMedia,
   sendUazapiReaction,
   sendUazapiText,
@@ -46,10 +51,17 @@ export interface SendReactionArgs {
   emoji: string
 }
 
+export interface SendInteractiveArgs {
+  to: string
+  payload: InteractiveMessagePayload
+  contextMessageId?: string
+}
+
 export interface WhatsAppProvider {
   sendText(args: SendTextArgs): Promise<WhatsAppSendResult>
   sendMedia(args: SendMediaArgs): Promise<WhatsAppSendResult>
   sendReaction(args: SendReactionArgs): Promise<WhatsAppSendResult>
+  sendInteractive(args: SendInteractiveArgs): Promise<WhatsAppSendResult>
 }
 
 class MetaProvider implements WhatsAppProvider {
@@ -87,6 +99,34 @@ class MetaProvider implements WhatsAppProvider {
       emoji: args.emoji,
     })
   }
+
+  async sendInteractive(args: SendInteractiveArgs): Promise<WhatsAppSendResult> {
+    const phoneNumberId = this.config.phone_number_id!
+    const accessToken = decrypt(this.config.access_token!)
+    if (args.payload.kind === 'buttons') {
+      return sendInteractiveButtons({
+        phoneNumberId,
+        accessToken,
+        to: args.to,
+        bodyText: args.payload.body,
+        headerText: args.payload.header,
+        footerText: args.payload.footer,
+        buttons: args.payload.buttons,
+        contextMessageId: args.contextMessageId,
+      })
+    }
+    return sendInteractiveList({
+      phoneNumberId,
+      accessToken,
+      to: args.to,
+      bodyText: args.payload.body,
+      buttonLabel: args.payload.button_label,
+      headerText: args.payload.header,
+      footerText: args.payload.footer,
+      sections: args.payload.sections,
+      contextMessageId: args.contextMessageId,
+    })
+  }
 }
 
 class UazapiProvider implements WhatsAppProvider {
@@ -109,6 +149,28 @@ class UazapiProvider implements WhatsAppProvider {
 
   async sendReaction(args: SendReactionArgs): Promise<WhatsAppSendResult> {
     return sendUazapiReaction(this.creds, args)
+  }
+
+  async sendInteractive(args: SendInteractiveArgs): Promise<WhatsAppSendResult> {
+    if (args.payload.kind === 'buttons') {
+      return sendUazapiButtons(this.creds, {
+        to: args.to,
+        bodyText: args.payload.body,
+        headerText: args.payload.header,
+        footerText: args.payload.footer,
+        buttons: args.payload.buttons,
+        contextMessageId: args.contextMessageId,
+      })
+    }
+    return sendUazapiList(this.creds, {
+      to: args.to,
+      bodyText: args.payload.body,
+      buttonLabel: args.payload.button_label,
+      headerText: args.payload.header,
+      footerText: args.payload.footer,
+      sections: args.payload.sections,
+      contextMessageId: args.contextMessageId,
+    })
   }
 }
 
