@@ -34,6 +34,7 @@ export function UazapiConnectPanel({ hasExistingConfig }: { hasExistingConfig: b
   const [disconnecting, setDisconnecting] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollDeadline = useRef<number>(0);
+  const reconnectTried = useRef(false);
 
   const stopPolling = useCallback(() => {
     if (pollTimer.current) {
@@ -72,6 +73,29 @@ export function UazapiConnectPanel({ hasExistingConfig }: { hasExistingConfig: b
     if (phase === 'connecting') startPolling();
     return () => stopPolling();
   }, [phase, startPolling, stopPolling]);
+
+  // `/instance/status` (polled above) never generates a QR code by
+  // itself — only `/instance/connect` does. A returning user whose
+  // instance is sitting disconnected (session expired, logged out on
+  // the phone, etc.) enters this phase with no qrcode yet, so kick off
+  // one reconnect attempt using the already-saved credentials.
+  useEffect(() => {
+    if (phase !== 'connecting') {
+      reconnectTried.current = false;
+      return;
+    }
+    if (qrcode || reconnectTried.current) return;
+    reconnectTried.current = true;
+    (async () => {
+      try {
+        const res = await fetch('/api/whatsapp/config/uazapi-reconnect', { method: 'POST' });
+        const data = await res.json();
+        if (res.ok && data.qrcode) setQrcode(data.qrcode);
+      } catch (err) {
+        console.error('UAZAPI reconnect failed:', err);
+      }
+    })();
+  }, [phase, qrcode]);
 
   async function handleConnect() {
     if (!serverUrl.trim() || !token.trim()) {
